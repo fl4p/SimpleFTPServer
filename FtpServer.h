@@ -789,8 +789,9 @@ private:
   FTP_SERVER_NETWORK_SERVER_CLASS  ftpServer;
   FTP_SERVER_NETWORK_SERVER_CLASS  dataServer;
 
-
-  FTP_CLIENT_NETWORK_CLASS  client;
+public:
+  FTP_CLIENT_NETWORK_CLASS  client; // command-channel client; public so callers can read remoteIP()
+private:
   FTP_CLIENT_NETWORK_CLASS  data;
 
   FTP_FILE     file;
