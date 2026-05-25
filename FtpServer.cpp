@@ -564,7 +564,7 @@ bool FtpServer::processCommand()
       client.println(F("503 ") );
       cmdStage = FTP_Stop;
     }
-    if( ! strcmp( parameter, pass ))
+    else if( ! strcmp( parameter, pass ))
     {
     	DEBUG_PRINTLN( F(" Authentication Ok. Waiting for commands.") );
 
@@ -769,25 +769,34 @@ bool FtpServer::processCommand()
   else if( CommandIs( "PORT" ))
   {
     data.stop();
-    // get IP of data client
-    dataIp[ 0 ] = atoi( parameter );
-    char * p = strchr( parameter, ',' );
-    for( uint8_t i = 1; i < 4; i ++ )
+    // Parse "h1,h2,h3,h4,p1,p2" with NULL-safe stepping
+    uint8_t parts[6];
+    const char *p = parameter;
+    bool ok = (p != nullptr);
+    for( uint8_t i = 0; ok && i < 6; i ++ )
     {
-      dataIp[ i ] = atoi( ++ p );
-      p = strchr( p, ',' );
+      parts[i] = (uint8_t) atoi( p );
+      if( i < 5 ) {
+        const char *q = strchr( p, ',' );
+        if( q == nullptr ) { ok = false; break; }
+        p = q + 1;
+      }
     }
-    // get port of data client
-    dataPort = 256 * atoi( ++ p );
-    p = strchr( p, ',' );
-    dataPort += atoi( ++ p );
-    if( p == nullptr ) {
+    // Reject PORT targeting a different host (FTP-bounce / SSRF)
+    if( ok ) {
+      IPAddress peer = client.remoteIP();
+      if( peer[0] != parts[0] || peer[1] != parts[1]
+       || peer[2] != parts[2] || peer[3] != parts[3] )
+        ok = false;
+    }
+    if( !ok ) {
       client.println(F("501 Can't interpret parameters") );
-    } else
-    {
-    	DEBUG_PRINT( F(" Data IP set to ") ); DEBUG_PRINT( int( dataIp[0]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[1]) );
-    	DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[2]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINTLN( int( dataIp[3]) );
-    	DEBUG_PRINT( F(" Data port set to ") ); DEBUG_PRINTLN( dataPort );
+    } else {
+      for( uint8_t i = 0; i < 4; i ++ ) dataIp[i] = parts[i];
+      dataPort = ((uint16_t)parts[4] << 8) | parts[5];
+      DEBUG_PRINT( F(" Data IP set to ") ); DEBUG_PRINT( int( dataIp[0]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[1]) );
+      DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[2]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINTLN( int( dataIp[3]) );
+      DEBUG_PRINT( F(" Data port set to ") ); DEBUG_PRINTLN( dataPort );
 
       client.println(F("200 PORT command successful") );
       dataConn = FTP_Active;
@@ -2500,26 +2509,25 @@ bool FtpServer::makePath( char * fullName, char * param )
   }
 
   // If the path is relative, concatenate it with workingDir (updated by "../")
+  int composed;
   if( param[0] != '/' )
   {
-    strcpy( fullName, workingDir );
-    if( fullName[ strlen(fullName) - 1 ] != '/' )
-      strncat( fullName, "/", FTP_CWD_SIZE );
-    strncat( fullName, param, FTP_CWD_SIZE );
+    size_t wdLen = strnlen( workingDir, FTP_CWD_SIZE );
+    const char *sep = ( wdLen > 0 && workingDir[wdLen - 1] == '/' ) ? "" : "/";
+    composed = snprintf( fullName, FTP_CWD_SIZE, "%s%s%s", workingDir, sep, param );
   }
   else
-    strcpy( fullName, param );
+    composed = snprintf( fullName, FTP_CWD_SIZE, "%s", param );
 
-  // Remove any trailing slash if present (unless it's root)
-  uint16_t strl = strlen( fullName ) - 1;
-  if( fullName[strl] == '/' && strl > 1 )
-    fullName[strl] = '\0';
-
-  if( strlen( fullName ) >= FTP_CWD_SIZE )
+  if( composed < 0 || composed >= (int)FTP_CWD_SIZE )
   {
     client.println(F("500 Command line too long"));
     return false;
   }
+
+  // Remove any trailing slash if present (unless it's root)
+  if( composed > 1 && fullName[composed - 1] == '/' )
+    fullName[composed - 1] = '\0';
 
 #ifdef UTF8_SUPPORT
   DEBUG_PRINT(F("utf8_strlen"));
